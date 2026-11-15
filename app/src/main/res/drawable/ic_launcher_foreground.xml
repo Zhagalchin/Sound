@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Столбики громкости, выровненные по одной линии -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path android:fillColor="#5C6B8A" android:pathData="M33,62h7v10h-7z M45,36h7v36h-7z M57,50h7v22h-7z M69,30h7v42h-7z" />
+    <path android:fillColor="#FCA311" android:pathData="M33,44h7v28h-7z M45,42h7v30h-7z M57,44h7v28h-7z M69,42h7v30h-7z" />
+    <path android:fillColor="#FFFFFF" android:pathData="M29,38h50v2.5h-50z" />
+</vector>
