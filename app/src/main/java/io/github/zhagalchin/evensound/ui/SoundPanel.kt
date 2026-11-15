@@ -12,7 +12,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
-import androidx.compose.material3.Slider
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -58,6 +58,7 @@ fun SoundPanel(
                     onClick = { onChange(settings.copy(mode = mode)) },
                     shape = SegmentedButtonDefaults.itemShape(index, LevelMode.entries.size),
                     icon = {},
+                    modifier = Modifier.focusRing(SegmentedButtonDefaults.itemShape(index, LevelMode.entries.size)),
                 ) { Text(modeTitles.getValue(mode), maxLines = 1) }
             }
         }
@@ -72,12 +73,19 @@ fun SoundPanel(
             Text("Усиление диалогов", style = MaterialTheme.typography.titleMedium)
             Text("+${settings.dialogBoostDb.roundToInt()} дБ", style = MaterialTheme.typography.titleMedium)
         }
-        Slider(
-            value = settings.dialogBoostDb,
-            onValueChange = { onChange(settings.copy(dialogBoostDb = it.roundToInt().toFloat())) },
-            valueRange = 0f..12f,
-            steps = 11,
-        )
+        // Кнопки вместо ползунка: одинаково удобно пальцем и пультом.
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            FilledTonalButton(
+                onClick = { onChange(settings.copy(dialogBoostDb = (settings.dialogBoostDb - 1f).coerceAtLeast(0f))) },
+                enabled = settings.dialogBoostDb > 0f,
+                modifier = Modifier.weight(1f).focusRing(),
+            ) { Text("− тише") }
+            FilledTonalButton(
+                onClick = { onChange(settings.copy(dialogBoostDb = (settings.dialogBoostDb + 1f).coerceAtMost(12f))) },
+                enabled = settings.dialogBoostDb < 12f,
+                modifier = Modifier.weight(1f).focusRing(),
+            ) { Text("+ громче") }
+        }
 
         if (gainDb != null) {
             Spacer(Modifier.height(4.dp))

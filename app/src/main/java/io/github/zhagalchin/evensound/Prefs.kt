@@ -16,6 +16,11 @@ class Prefs(context: Context) {
         )
         set(value) = sp.edit().putString("mode", value.mode.name).putFloat("dialogBoost", value.dialogBoostDb).apply()
 
+    /** Включён ли системный режим (для всех приложений). */
+    var globalEnabled: Boolean
+        get() = sp.getBoolean("globalEnabled", false)
+        set(value) = sp.edit().putBoolean("globalEnabled", value).apply()
+
     fun position(uri: Uri): Long = sp.getLong("pos:$uri", 0L)
 
     fun savePosition(uri: Uri, positionMs: Long, durationMs: Long) {

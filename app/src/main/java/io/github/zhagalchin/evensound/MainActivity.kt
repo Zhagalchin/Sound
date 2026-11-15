@@ -2,7 +2,11 @@ package io.github.zhagalchin.evensound
 
 import android.content.Intent
 import android.net.Uri
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
+import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -21,6 +25,8 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
@@ -53,10 +59,13 @@ import androidx.media3.ui.PlayerView
 import io.github.zhagalchin.evensound.dsp.EngineSettings
 import io.github.zhagalchin.evensound.player.LevelingAudioProcessor
 import io.github.zhagalchin.evensound.player.PlayerFactory
+import io.github.zhagalchin.evensound.system.GlobalEffect
+import io.github.zhagalchin.evensound.system.GlobalEffectService
 import io.github.zhagalchin.evensound.ui.SoundPanel
+import io.github.zhagalchin.evensound.ui.focusRing
 import kotlinx.coroutines.delay
 
-@UnstableApi
+@androidx.annotation.OptIn(UnstableApi::class)
 class MainActivity : ComponentActivity() {
 
     private lateinit var prefs: Prefs
@@ -66,6 +75,9 @@ class MainActivity : ComponentActivity() {
     private var currentUri by mutableStateOf<Uri?>(null)
     private var settings by mutableStateOf(EngineSettings())
     private var error by mutableStateOf<String?>(null)
+    private var sheetOpen by mutableStateOf(false)
+    private var globalEnabled by mutableStateOf(false)
+    private var pickerMissing by mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -74,6 +86,9 @@ class MainActivity : ComponentActivity() {
         prefs = Prefs(this)
         settings = prefs.settings
         processor.settings = settings
+        globalEnabled = prefs.globalEnabled
+        // Сервис мог быть остановлен системой — поднимаем его снова.
+        if (globalEnabled) runCatching { GlobalEffectService.setEnabled(this, true) }
         player = PlayerFactory.create(this, processor)
         player.addListener(object : Player.Listener {
             override fun onPlayerError(e: PlaybackException) {
@@ -111,6 +126,23 @@ class MainActivity : ComponentActivity() {
         super.onStop()
         savePosition()
         player.pause()
+        GlobalEffect.setPaused(false)
+    }
+
+    override fun onStart() {
+        super.onStart()
+        if (currentUri != null) GlobalEffect.setPaused(true)
+    }
+
+    /** Кнопка «Меню» на пульте открывает настройки звука во время просмотра. */
+    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        if (currentUri != null && !sheetOpen &&
+            (keyCode == KeyEvent.KEYCODE_MENU || keyCode == KeyEvent.KEYCODE_SETTINGS)
+        ) {
+            sheetOpen = true
+            return true
+        }
+        return super.onKeyDown(keyCode, event)
     }
 
     override fun onDestroy() {
@@ -127,6 +159,7 @@ class MainActivity : ComponentActivity() {
         player.setMediaItem(MediaItem.fromUri(uri), prefs.position(uri))
         player.playWhenReady = autoPlay
         player.prepare()
+        GlobalEffect.setPaused(true)
         setFullscreen(true)
     }
 
@@ -135,6 +168,8 @@ class MainActivity : ComponentActivity() {
         player.stop()
         player.clearMediaItems()
         currentUri = null
+        sheetOpen = false
+        GlobalEffect.setPaused(false)
         setFullscreen(false)
     }
 
@@ -148,6 +183,13 @@ class MainActivity : ComponentActivity() {
         settings = value
         processor.settings = value
         prefs.settings = value
+        GlobalEffect.update(value)
+    }
+
+    private fun setGlobal(enabled: Boolean) {
+        globalEnabled = enabled
+        prefs.globalEnabled = enabled
+        runCatching { GlobalEffectService.setEnabled(this, enabled) }
     }
 
     private fun setFullscreen(on: Boolean) {
@@ -168,6 +210,8 @@ class MainActivity : ComponentActivity() {
                 open(uri)
             }
         }
+        val notificationPermission =
+            rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
         Surface(Modifier.fillMaxSize()) {
             Column(
                 Modifier
@@ -183,16 +227,72 @@ class MainActivity : ComponentActivity() {
                             "Громкость не придётся крутить весь фильм.",
                         style = MaterialTheme.typography.bodyLarge,
                     )
+                    SoundPanel(settings, ::updateSettings, gainDb = null, sourceChannels = 0)
+
+                    HorizontalDivider()
+                    Text("Для всех приложений", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "Выравнивает звук там, где нельзя выбрать свой плеер: онлайн-кинотеатры, " +
+                            "ТВ, YouTube. Работает в фоне и включается сам после перезагрузки.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
                     Button(
-                        onClick = { picker.launch(arrayOf("video/*", "audio/*")) },
-                        modifier = Modifier.fillMaxWidth(),
+                        onClick = {
+                            if (!globalEnabled && Build.VERSION.SDK_INT >= 33 &&
+                                checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+                            ) {
+                                runCatching { notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS) }
+                            }
+                            setGlobal(!globalEnabled)
+                        },
+                        modifier = Modifier.fillMaxWidth().focusRing(),
+                    ) { Text(if (globalEnabled) "Выключить для всех приложений" else "Включить для всех приложений") }
+                    if (globalEnabled) {
+                        val (text, bad) = when (val st = GlobalEffect.status) {
+                            GlobalEffect.Status.Active -> "Работает. Откройте любое приложение — звук уже выравнивается." to false
+                            GlobalEffect.Status.Paused -> "Пауза: сейчас играет встроенный плеер." to false
+                            GlobalEffect.Status.Off -> "Запускается…" to false
+                            GlobalEffect.Status.LostControl ->
+                                "Эффектом управляет другое приложение (эквалайзер или «улучшайзер» звука). Отключите его." to true
+                            is GlobalEffect.Status.Failed ->
+                                "Устройство не разрешило системный эффект: ${st.reason}" to true
+                        }
+                        Text(
+                            text,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (bad) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                        )
+                        Text(
+                            "Чтобы работало в полную силу: в настройках звука приставки выберите вывод PCM " +
+                                "(не «сквозной»/passthrough/RAW), а громкость самой приставки держите на максимуме " +
+                                "и регулируйте её телевизором.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+
+                    HorizontalDivider()
+                    Text("Встроенный плеер", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "Для своих файлов. Обработка точнее, чем в системном режиме: " +
+                            "в дорожках 5.1 диалоги усиливаются отдельно от музыки и эффектов.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    OutlinedButton(
+                        onClick = {
+                            runCatching { picker.launch(arrayOf("video/*", "audio/*")) }
+                                .onFailure { pickerMissing = true }
+                        },
+                        modifier = Modifier.fillMaxWidth().focusRing(),
                     ) { Text("Открыть видео") }
                     Text(
-                        "Можно и из файлового менеджера: «Открыть с помощью» → «Ровный звук».",
+                        if (pickerMissing) "На этом устройстве нет системного выбора файлов. Откройте видео из " +
+                            "файлового менеджера: «Открыть с помощью» → «Ровный звук»."
+                        else "Можно и из файлового менеджера: «Открыть с помощью» → «Ровный звук». " +
+                            "Во время просмотра настройки звука — кнопка «Меню» на пульте.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    SoundPanel(settings, ::updateSettings, gainDb = null, sourceChannels = 0)
                 }
             }
         }
@@ -202,7 +302,6 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun PlayerScreen() {
         var controlsVisible by remember { mutableStateOf(true) }
-        var sheetOpen by remember { mutableStateOf(false) }
 
         Box(Modifier.fillMaxSize().background(Color.Black)) {
             AndroidView(
@@ -213,6 +312,8 @@ class MainActivity : ComponentActivity() {
                         setShowNextButton(false)
                         setShowPreviousButton(false)
                         setShowSubtitleButton(true)
+                        isFocusable = true
+                        post { requestFocus() }
                         setControllerVisibilityListener(
                             PlayerView.ControllerVisibilityListener { controlsVisible = it == android.view.View.VISIBLE }
                         )
@@ -223,7 +324,7 @@ class MainActivity : ComponentActivity() {
             if (controlsVisible) {
                 FilledTonalButton(
                     onClick = { sheetOpen = true },
-                    modifier = Modifier.align(Alignment.TopEnd).safeDrawingPadding().padding(12.dp),
+                    modifier = Modifier.align(Alignment.TopEnd).safeDrawingPadding().padding(12.dp).focusRing(),
                 ) { Text("Звук") }
             }
             error?.let {
